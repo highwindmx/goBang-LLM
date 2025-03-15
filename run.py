@@ -1,3 +1,4 @@
+import os
 import re
 import queue
 import threading
@@ -5,6 +6,9 @@ import tkinter as tk
 from tkinter import messagebox
 import ollama
 
+# 填写你的模型名称
+MODEL_1 = "qwen2.5:latest"
+MODEL_2 = "deepseek-r1:8b"
 # 定义常量
 BOARD_SIZE = 15
 GRID_SIZE = 40
@@ -24,9 +28,6 @@ ERROR_TEXT_COLOR = "red"
 STEP_TEXT_COLOR = "orange"
 BLACK_PIECE_COLOR = "black"
 WHITE_PIECE_COLOR = "white"
-
-MODEL_1 = "qwen2.5:latest"
-MODEL_2 = "deepseek-r1:8b"
 
 class GomokuGame:
     def __init__(self, root):
@@ -128,6 +129,13 @@ class GomokuGame:
             # 左侧坐标
             self.canvas.create_text(GRID_SIZE // 2, GRID_SIZE * (i + 1), text=str(i + 1), fill=COORDINATE_TEXT_COLOR)
 
+    def insert_text(self, text, tag=None):
+        """
+        向文本框插入文本并滚动到末尾。
+        """
+        self.text_box.insert(tk.END, text, tag)
+        self.text_box.see(tk.END)  # 滚动到末尾
+
     def get_move_from_model(self, model_name, board_state):
         """
         从模型获取落子位置。
@@ -182,8 +190,8 @@ class GomokuGame:
         """
         tag = "model1" if (self.current_player - 1) % 2 == 0 else "model2"
         # 显示非法落子的具体位置
-        self.text_box.insert(tk.END, f"【{model_name}】 思考结果: {result_text}\n", tag)  # 显示思考结果
-        self.text_box.insert(tk.END, f"【{model_name}】 返回非法坐标 ({row}, {col})，重试第 {retries + 1} 次...\n", (ERROR_TEXT_COLOR,))
+        self.insert_text(f"【{model_name}】 思考结果: {result_text}\n", tag)  # 显示思考结果
+        self.insert_text(f"【{model_name}】 返回非法坐标 ({row}, {col})，重试第 {retries + 1} 次...\n", (ERROR_TEXT_COLOR,))
 
         # 非法落子扣1分
         if self.current_player == BLACK_PLAYER:
@@ -202,8 +210,8 @@ class GomokuGame:
         :param result_text: 模型思考结果
         """
         tag = "model1" if (self.current_player - 1) % 2 == 0 else "model2"
-        self.text_box.insert(tk.END, f"【{model_name}】 思考结果: {result_text}\n", tag)  # 显示思考结果
-        self.text_box.insert(tk.END, f"【{model_name}】 无法截取坐标值，重试第 {retries + 1} 次...\n", (ERROR_TEXT_COLOR,))
+        self.insert_text(f"【{model_name}】 思考结果: {result_text}\n", tag)  # 显示思考结果
+        self.insert_text(f"【{model_name}】 无法截取坐标值，重试第 {retries + 1} 次...\n", (ERROR_TEXT_COLOR,))
 
     def on_motion(self, event):
         """
@@ -305,7 +313,7 @@ class GomokuGame:
                                         fill=step_color)  # 修改颜色为规定的颜色
                 #print(f"绘制步数文字: 坐标 ({GRID_SIZE * (col + 1)}, {GRID_SIZE * (row + 1)}), 步数 {self.step_count}")  # 添加调试信息
                 # 在右侧消息栏显示信息，包含步数，应用 'step' 标签
-                self.text_box.insert(tk.END, f"用户在第 {row + 1} 行，第 {col + 1} 列落子（{color}），步数: {self.step_count}\n", ("step",))
+                self.insert_text(f"用户在第 {row + 1} 行，第 {col + 1} 列落子（{color}），步数: {self.step_count}\n", ("step",))  # 修改为调用 insert_text
                 # 删除虚框
                 if self.preview_rect:
                     self.canvas.delete(self.preview_rect)
@@ -340,7 +348,7 @@ class GomokuGame:
                                         text=str(self.step_count),
                                         fill=step_color)  # 修改颜色为规定的颜色
                 # 在右侧消息栏显示信息，包含步数
-                self.text_box.insert(tk.END, f"【{model_name}】在第 {row + 1} 行，第 {col + 1} 列落子（{color}），步数: {self.step_count}\n", ("step",))
+                self.insert_text(f"【{model_name}】在第 {row + 1} 行，第 {col + 1} 列落子（{color}），步数: {self.step_count}\n", ("step",))  # 修改为调用 insert_text
                 # 直接更新棋盘状态
                 self.board[row][col] = self.current_player
                 # 检查是否获胜
@@ -368,7 +376,7 @@ class GomokuGame:
         color = "黑" if self.current_player == 1 else "白"
 
         # 添加思考中提示
-        self.text_box.insert(tk.END, f"【{model_name}】 执{color}棋，正在思考中...\n", tag)
+        self.insert_text(f"【{model_name}】 执{color}棋，正在思考中...\n", tag)  # 修改为调用 insert_text
 
         # 使用线程来获取模型决策
         thread = threading.Thread(target=self.threaded_model_move, args=(model_name, color, tag))
@@ -428,5 +436,8 @@ class GomokuGame:
 
 if __name__ == "__main__":
     root = tk.Tk()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(script_dir, "logo.ico")
+    root.iconbitmap(icon_path)
     game = GomokuGame(root)
     root.mainloop()
