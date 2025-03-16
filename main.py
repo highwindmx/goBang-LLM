@@ -8,14 +8,14 @@ import ollama
 
 # 填写你的模型名称
 MODEL_1 = "qwen2.5:latest"
-MODEL_2 = "deepseek-r1:8b"
+MODEL_2 = "qwen2.5:latest" #deepseek-r1:8b"
+BLACK_PLAYER = 1
+WHITE_PLAYER = 2
 # 定义常量
 BOARD_SIZE = 15
 GRID_SIZE = 40
 WINDOW_WIDTH = GRID_SIZE * (BOARD_SIZE + 1)
 WINDOW_HEIGHT = GRID_SIZE * (BOARD_SIZE + 1)
-BLACK_PLAYER = 1
-WHITE_PLAYER = 2
 MAX_RETRIES = 2
 STEP_INTERVAL = 100
 # 新增颜色常量
@@ -111,6 +111,7 @@ class GomokuGame:
         # 开始游戏，让第一个模型先落子
         self.model_move()
 
+    # 初始化相关函数
     def draw_board(self):
         """
         绘制五子棋棋盘。
@@ -129,17 +130,23 @@ class GomokuGame:
             # 左侧坐标
             self.canvas.create_text(GRID_SIZE // 2, GRID_SIZE * (i + 1), text=str(i + 1), fill=COORDINATE_TEXT_COLOR)
 
-    def insert_text(self, text, tag=None):
+    # 模型交互相关函数
+    def model_move(self):
         """
-        向文本框插入文本并滚动到末尾。
+        模型进行落子。
         """
-        self.text_box.insert(tk.END, text, tag)
-        self.text_box.see(tk.END)  # 滚动到末尾
+        self.insert_text(f"正在思考中...\n")
+        model_name = self.models[self.current_player - 1]  # 列表索引从0开始
+        color = self.get_player_color(self.current_player)
+        tag = "model1" if self.current_player == 1 else "model2"
+        thread = threading.Thread(target=self.threaded_model_move, args=(model_name, color, tag))
+        thread.start()
+        self.process_result_queue()
 
     def get_move_from_model(self, model_name, board_state):
         """
         从模型获取落子位置。
-    
+
         :param model_name: 模型名称
         :param board_state: 当前棋盘状态
         :return: 落子的行和列，错误信息，思考结果
@@ -148,13 +155,13 @@ class GomokuGame:
         board_str = "\n".join([" ".join(map(str, row)) for row in board_state])
         # 修改提示词，添加棋盘大小信息
         prompt = f"""
-                你是一名五子棋高手，你需要尽可能完成五子连珠，
-                当前棋盘大小为 {BOARD_SIZE}x{BOARD_SIZE}，横纵坐标均为1-{BOARD_SIZE}，
-                当前棋盘状态以二维数组形式表示，其中每个元素代表棋盘上的一个格子，0 表示该格子为空，1表示黑棋，2表示白棋。
-                棋盘状态:\n{board_str}\n，
-                落子位置必须是棋盘上的空位置（即对应元素为 0）；
-                当前你执 {'黑棋' if self.current_player == 1 else '白棋'}，
-                请给出落子的行和列，格式：(3,5)
+                你是一名五子棋高手，你需要尽可能完成五子连珠。
+                当前棋盘大小为 {BOARD_SIZE}x{BOARD_SIZE}，横纵坐标均为1至{BOARD_SIZE}；
+                当前棋盘状态以二维数组形式表示，其中每个元素代表棋盘上的一个格子，0 表示该格子为空，1表示黑棋，2表示白棋，
+                棋盘状态:\n{board_str}\n；
+                落子位置必须是棋盘上的空位置（即对应元素为 0），如果落子在已有棋子的位置上会判为非法并罚1分；
+                当前你执 {'黑棋' if self.current_player == 1 else '白棋'}：
+                1.请列出当前棋盘状况；2.请给出你落子的行和列，格式必须为：(3,5)
             """
         retries = 0
         while retries < MAX_RETRIES:
@@ -173,46 +180,23 @@ class GomokuGame:
                 else:
                     self._handle_no_coordinates(model_name, retries, result_text)  # 传递思考结果
             except Exception as e:
-                # 将错误信息显示在文本框中
-                self.text_box.insert(tk.END, f"【{model_name}】 出现错误: {e}，重试第 {retries + 1} 次...\n")
+                # 修改文本插入格式
+                self.insert_text(f"出现错误: {e}，重试第 {retries + 1}/{MAX_RETRIES} 次...\n", ("error",))
             retries += 1
         return None, None, f"【{model_name}】 重试 {MAX_RETRIES} 次后仍无法获取有效坐标", None
 
-    def _handle_invalid_move(self, model_name, retries, result_text, row, col):
+    def threaded_model_move(self, model_name, color, tag):
         """
-        处理模型返回的非法落子位置。
-    
+        线程函数，用于获取模型决策。
+
         :param model_name: 模型名称
-        :param retries: 重试次数
-        :param result_text: 模型思考结果
-        :param row: 落子的行
-        :param col: 落子的列
+        :param color: 玩家颜色
+        :param tag: 文本标签
         """
-        tag = "model1" if (self.current_player - 1) % 2 == 0 else "model2"
-        # 显示非法落子的具体位置
-        self.insert_text(f"【{model_name}】 思考结果: {result_text}\n", tag)  # 显示思考结果
-        self.insert_text(f"【{model_name}】 返回非法坐标 ({row}, {col})，重试第 {retries + 1} 次...\n", (ERROR_TEXT_COLOR,))
+        row, col, error, result = self.get_move_from_model(model_name, self.board)
+        self.result_queue.put((row, col, error, result, model_name, color, tag))
 
-        # 非法落子扣1分
-        if self.current_player == BLACK_PLAYER:
-            self.black_score -= 1
-        else:
-            self.white_score -= 1
-        # 更新记分牌显示
-        self.score_board.config(text=f"黑棋: {self.black_score}  白棋: {self.white_score}")
-
-    def _handle_no_coordinates(self, model_name, retries, result_text):
-        """
-        处理模型无法截取坐标值的情况。
-    
-        :param model_name: 模型名称
-        :param retries: 重试次数
-        :param result_text: 模型思考结果
-        """
-        tag = "model1" if (self.current_player - 1) % 2 == 0 else "model2"
-        self.insert_text(f"【{model_name}】 思考结果: {result_text}\n", tag)  # 显示思考结果
-        self.insert_text(f"【{model_name}】 无法截取坐标值，重试第 {retries + 1} 次...\n", (ERROR_TEXT_COLOR,))
-
+    # 用户交互相关函数
     def on_motion(self, event):
         """
         处理鼠标移动事件。
@@ -237,6 +221,96 @@ class GomokuGame:
             if self.preview_rect:
                 self.canvas.delete(self.preview_rect)
                 self.preview_rect = None
+
+    def on_click(self, event):
+        """
+        处理鼠标点击事件。
+
+        :param event: 鼠标事件
+        """
+        x, y = event.x, event.y
+        if GRID_SIZE <= x <= GRID_SIZE * (BOARD_SIZE + 1) and GRID_SIZE <= y <= GRID_SIZE * (BOARD_SIZE + 1):
+            col = (x - GRID_SIZE) // GRID_SIZE
+            row = (y - GRID_SIZE) // GRID_SIZE
+            if self.board[row][col] == 0:
+                color = self.get_player_color(self.current_player)
+                fill_color = self.get_fill_color(self.current_player)
+                self.canvas.create_oval(GRID_SIZE * (col + 1) - 18, GRID_SIZE * (row + 1) - 18,
+                                        GRID_SIZE * (col + 1) + 18, GRID_SIZE * (row + 1) + 18,
+                                        fill=fill_color)
+                self.board[row][col] = self.current_player
+                self.step_count += 1  # 增加步数
+                # 根据当前玩家选择步数文本颜色
+                step_color = self.STEP_TEXT_COLOR_BLACK if self.current_player == BLACK_PLAYER else self.STEP_TEXT_COLOR_WHITE
+                self.canvas.create_text(GRID_SIZE * (col + 1), GRID_SIZE * (row + 1),
+                                        text=str(self.step_count),
+                                        fill=step_color)  # 修改颜色为规定的颜色
+                # 在右侧消息栏显示信息，包含步数，应用 'step' 标签
+                self.insert_text(f"用户在第 {row + 1} 行，第 {col + 1} 列落子（{color}），步数: {self.step_count}\n", ("step",))  # 修改为调用 insert_text
+                # 删除虚框
+                if self.preview_rect:
+                    self.canvas.delete(self.preview_rect)
+                    self.preview_rect = None
+                # 检查是否获胜
+                if self.check_win(self.board, self.current_player):
+                    self.show_win_message(self.current_player)
+                    return
+                # 切换玩家
+                self.current_player = WHITE_PLAYER if self.current_player == BLACK_PLAYER else BLACK_PLAYER
+                # 调用模型进行落子
+                self.model_move()
+
+    # 游戏逻辑相关函数
+    def process_result_queue(self):
+        """
+        处理队列中的结果。
+        """
+        try:
+            row, col, error, result, model_name, color, tag = self.result_queue.get_nowait()
+            if result:
+                self.insert_text(f"思考结果: {result}\n", tag)
+            if row is not None and col is not None and self.board[row][col] == 0:
+                self.step_count += 1
+                step_color = self.STEP_TEXT_COLOR_BLACK if self.current_player == BLACK_PLAYER else self.STEP_TEXT_COLOR_WHITE
+                self.canvas.create_oval(GRID_SIZE * (col + 1) - 18, GRID_SIZE * (row + 1) - 18,
+                                        GRID_SIZE * (col + 1) + 18, GRID_SIZE * (row + 1) + 18,
+                                        fill=self.get_fill_color(self.current_player))
+                self.canvas.create_text(GRID_SIZE * (col + 1), GRID_SIZE * (row + 1),
+                                        text=str(self.step_count),
+                                        fill=step_color)
+                self.insert_text(f"在第 {row + 1} 行，第 {col + 1} 列落子（{color}），步数: {self.step_count}\n", ("step",))
+                self.board[row][col] = self.current_player
+                if self.check_win(self.board, self.current_player):
+                    self.show_win_message(self.current_player)
+                    return
+                self.current_player = WHITE_PLAYER if self.current_player == BLACK_PLAYER else BLACK_PLAYER
+                self.model_move()
+            else:
+                if error == "无法截取坐标值":
+                    self.insert_text(f"无法截取坐标值，请用户操作\n", tag)
+                else:
+                    self.insert_text(f"无法获得反馈，请用户操作\n", tag)
+        except queue.Empty:
+            pass
+        self.root.after(STEP_INTERVAL, self.process_result_queue)
+
+    def show_win_message(self, player):
+        """
+        显示游戏结束消息，并询问是否再来一局。
+
+        :param player: 获胜玩家编号
+        """
+        player_name = self.get_player_color(player)
+        result = messagebox.askyesno("游戏结束", f"{player_name} 棋获胜！是否再来一局？")
+        if result:
+            if player == BLACK_PLAYER:
+                self.black_score += 5
+            else:
+                self.white_score += 5
+            self.score_board.config(text=f"黑棋: {self.black_score}  白棋: {self.white_score}")
+            self.reset_game()
+        else:
+            self.root.destroy()
 
     def check_win(self, board, player):
         """
@@ -270,6 +344,37 @@ class GomokuGame:
                             return True
         return False
 
+    def reset_game(self):
+        """
+        重置游戏。
+        """
+        # 清空棋盘
+        self.canvas.delete("all")
+        self.draw_board()
+        # 重置棋盘状态
+        self.board = [[0] * BOARD_SIZE for _ in range(BOARD_SIZE)]
+        # 重置当前玩家
+        self.current_player = 1
+        # 清空消息栏
+        self.text_box.delete(1.0, tk.END)
+        # 重置预点击虚框
+        self.preview_rect = None
+        # 让第一个模型先落子
+        self.model_move()
+
+    # 辅助函数
+    def insert_text(self, text, tag=None):
+        """
+        向文本框插入文本并滚动到末尾。
+        """
+        player_color = self.get_player_color(self.current_player)
+        model_name = self.models[self.current_player - 1]
+        formatted_text = f"{player_color}方【{model_name}】：{text}"
+        if tag is None:
+            tag = "model1" if (self.current_player - 1) % 2 == 0 else "model2"
+        self.text_box.insert(tk.END, formatted_text, tag)
+        self.text_box.see(tk.END)  # 滚动到末尾
+
     def get_player_color(self, player):
         """
         获取玩家的颜色名称。
@@ -288,151 +393,39 @@ class GomokuGame:
         """
         return "black" if player == BLACK_PLAYER else "white"
 
-    def on_click(self, event):
+    def _handle_invalid_move(self, model_name, retries, result_text, row, col):
         """
-        处理鼠标点击事件。
-
-        :param event: 鼠标事件
-        """
-        x, y = event.x, event.y
-        if GRID_SIZE <= x <= GRID_SIZE * (BOARD_SIZE + 1) and GRID_SIZE <= y <= GRID_SIZE * (BOARD_SIZE + 1):
-            col = (x - GRID_SIZE) // GRID_SIZE
-            row = (y - GRID_SIZE) // GRID_SIZE
-            if self.board[row][col] == 0:
-                color = self.get_player_color(self.current_player)
-                fill_color = self.get_fill_color(self.current_player)
-                self.canvas.create_oval(GRID_SIZE * (col + 1) - 18, GRID_SIZE * (row + 1) - 18,
-                                        GRID_SIZE * (col + 1) + 18, GRID_SIZE * (row + 1) + 18,
-                                        fill=fill_color)
-                self.board[row][col] = self.current_player
-                self.step_count += 1  # 增加步数
-                # 根据当前玩家选择步数文本颜色
-                step_color = self.STEP_TEXT_COLOR_BLACK if self.current_player == BLACK_PLAYER else self.STEP_TEXT_COLOR_WHITE
-                self.canvas.create_text(GRID_SIZE * (col + 1), GRID_SIZE * (row + 1),
-                                        text=str(self.step_count),
-                                        fill=step_color)  # 修改颜色为规定的颜色
-                #print(f"绘制步数文字: 坐标 ({GRID_SIZE * (col + 1)}, {GRID_SIZE * (row + 1)}), 步数 {self.step_count}")  # 添加调试信息
-                # 在右侧消息栏显示信息，包含步数，应用 'step' 标签
-                self.insert_text(f"用户在第 {row + 1} 行，第 {col + 1} 列落子（{color}），步数: {self.step_count}\n", ("step",))  # 修改为调用 insert_text
-                # 删除虚框
-                if self.preview_rect:
-                    self.canvas.delete(self.preview_rect)
-                    self.preview_rect = None
-                # 检查是否获胜
-                if self.check_win(self.board, self.current_player):
-                    self.show_win_message(self.current_player)
-                    return
-                # 切换玩家
-                self.current_player = WHITE_PLAYER if self.current_player == BLACK_PLAYER else BLACK_PLAYER
-                # 调用模型进行落子
-                self.model_move()
-
-    def process_result_queue(self):
-        """
-        处理队列中的结果。
-        """
-        try:
-            row, col, error, result, model_name, color, tag = self.result_queue.get_nowait()
-            if result:
-                self.text_box.insert(tk.END, f"【{model_name}】 思考结果: {result}\n", tag)
-            if row is not None and col is not None and self.board[row][col] == 0:
-                self.step_count += 1
-                # 根据当前玩家选择步数文本颜色
-                step_color = self.STEP_TEXT_COLOR_BLACK if self.current_player == BLACK_PLAYER else self.STEP_TEXT_COLOR_WHITE
-                # 先绘制棋子
-                self.canvas.create_oval(GRID_SIZE * (col + 1) - 18, GRID_SIZE * (row + 1) - 18,
-                                        GRID_SIZE * (col + 1) + 18, GRID_SIZE * (row + 1) + 18,
-                                        fill=self.get_fill_color(self.current_player))
-                # 再绘制步数文字
-                self.canvas.create_text(GRID_SIZE * (col + 1), GRID_SIZE * (row + 1),
-                                        text=str(self.step_count),
-                                        fill=step_color)  # 修改颜色为规定的颜色
-                # 在右侧消息栏显示信息，包含步数
-                self.insert_text(f"【{model_name}】在第 {row + 1} 行，第 {col + 1} 列落子（{color}），步数: {self.step_count}\n", ("step",))  # 修改为调用 insert_text
-                # 直接更新棋盘状态
-                self.board[row][col] = self.current_player
-                # 检查是否获胜
-                if self.check_win(self.board, self.current_player):
-                    self.show_win_message(self.current_player)
-                    return
-                # 切换玩家
-                self.current_player = WHITE_PLAYER if self.current_player == BLACK_PLAYER else BLACK_PLAYER
-                self.model_move()
-            else:
-                if error == "无法截取坐标值":
-                    self.text_box.insert(tk.END, f"无法截取【{model_name}】 的坐标值，请用户操作\n", tag)
-                else:
-                    self.text_box.insert(tk.END, f"无法获得【{model_name}】 的反馈，请用户操作\n", tag)
-        except queue.Empty:
-            pass
-        self.root.after(STEP_INTERVAL, self.process_result_queue)
-
-    def model_move(self):
-        """
-        模型进行落子。
-        """
-        model_name = self.models[(self.current_player - 1) % 2]
-        tag = "model1" if (self.current_player - 1) % 2 == 0 else "model2"
-        color = "黑" if self.current_player == 1 else "白"
-
-        # 添加思考中提示
-        self.insert_text(f"【{model_name}】 执{color}棋，正在思考中...\n", tag)  # 修改为调用 insert_text
-
-        # 使用线程来获取模型决策
-        thread = threading.Thread(target=self.threaded_model_move, args=(model_name, color, tag))
-        thread.start()
-
-        # 处理队列中的结果
-        self.process_result_queue()
-
-    def threaded_model_move(self, model_name, color, tag):
-        """
-        线程函数，用于获取模型决策。
+        处理模型返回的非法落子位置。
 
         :param model_name: 模型名称
-        :param color: 玩家颜色
-        :param tag: 文本标签
+        :param retries: 重试次数
+        :param result_text: 模型思考结果
+        :param row: 落子的行
+        :param col: 落子的列
         """
-        row, col, error, result = self.get_move_from_model(model_name, self.board)
-        self.result_queue.put((row, col, error, result, model_name, color, tag))
+        tag = "model1" if (self.current_player - 1) % 2 == 0 else "model2"
+        self.insert_text(f"思考结果: {result_text}\n", tag)
+        self.insert_text(f"返回非法坐标 ({row}, {col})，重试第 {retries + 1}/{MAX_RETRIES} 次...\n", ("error",))
 
-    def show_win_message(self, player):
-        """
-        显示游戏结束消息，并询问是否再来一局。
-
-        :param player: 获胜玩家编号
-        """
-        player_name = self.get_player_color(player)
-        result = messagebox.askyesno("游戏结束", f"{player_name} 棋获胜！是否再来一局？")
-        if result:
-            # 更新得分，胜利加5分
-            if player == BLACK_PLAYER:
-                self.black_score += 5
-            else:
-                self.white_score += 5
-            # 更新记分牌显示
-            self.score_board.config(text=f"黑棋: {self.black_score}  白棋: {self.white_score}")
-            self.reset_game()
+        # 非法落子扣1分
+        if self.current_player == BLACK_PLAYER:
+            self.black_score -= 1
         else:
-            self.root.destroy()
+            self.white_score -= 1
+        # 更新记分牌显示
+        self.score_board.config(text=f"黑棋: {self.black_score}  白棋: {self.white_score}")
 
-    def reset_game(self):
+    def _handle_no_coordinates(self, model_name, retries, result_text):
         """
-        重置游戏。
+        处理模型无法截取坐标值的情况。
+
+        :param model_name: 模型名称
+        :param retries: 重试次数
+        :param result_text: 模型思考结果
         """
-        # 清空棋盘
-        self.canvas.delete("all")
-        self.draw_board()
-        # 重置棋盘状态
-        self.board = [[0] * BOARD_SIZE for _ in range(BOARD_SIZE)]
-        # 重置当前玩家
-        self.current_player = 1
-        # 清空消息栏
-        self.text_box.delete(1.0, tk.END)
-        # 重置预点击虚框
-        self.preview_rect = None
-        # 让第一个模型先落子
-        self.model_move()
+        tag = "model1" if (self.current_player - 1) % 2 == 0 else "model2"
+        self.insert_text(f"思考结果: {result_text}\n", tag)
+        self.insert_text(f"无法截取坐标值，重试第 {retries + 1}/{MAX_RETRIES} 次...\n", ("error",))
 
 if __name__ == "__main__":
     root = tk.Tk()
